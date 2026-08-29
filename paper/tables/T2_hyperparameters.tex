@@ -1,0 +1,46 @@
+\begin{table}[t]
+\centering
+\caption{Full hyperparameter configuration (local_debug).}
+\label{tab:hyperparameters}
+\begin{tabular}{lll}
+\toprule
+Section & Key & Value \\
+\midrule
+experiment\_name & experiment\_name & local\_debug \\
+seeds & seeds & [0] \\
+device & device & cpu \\
+data & data.image\_size & 28 \\
+data & data.num\_workers & 0 \\
+data & data.batch\_size & 32 \\
+data & data.specialties & ['PathMNIST', 'DermaMNIST', 'BloodMNIST'] \\
+data & data.data\_root & ./data\_cache \\
+data & data.subsample\_cap & 2000 \\
+data & data.val\_fraction & 0.1 \\
+model & model.backbone & resnet18 \\
+model & model.pretrained & True \\
+model & model.freeze\_backbone & True \\
+model & model.lora.r & 4 \\
+model & model.lora.alpha & 8 \\
+model & model.lora.dropout & 0.05 \\
+model & model.lora.target\_modules & ['conv1', 'layer1', 'layer2', 'layer3', 'layer4'] \\
+federated & federated.num\_clients & 3 \\
+federated & federated.rounds & 5 \\
+federated & federated.local\_epochs & 1 \\
+federated & federated.client\_fraction & 1.0 \\
+federated & federated.optimizer & sgd \\
+federated & federated.lr & 0.01 \\
+federated & federated.momentum & 0.9 \\
+federated & federated.weight\_decay & 0.0001 \\
+method & method.name & fedsaa \\
+method & method.fedsaa.tau & 0.1 \\
+method & method.fedsaa.lambda & 0.5 \\
+method & method.fedsaa.svd\_rank & 4 \\
+method & method.fedprox.mu & 0.01 \\
+logging & logging.results\_dir & ./results \\
+logging & logging.log\_every\_round & 1 \\
+logging & logging.save\_checkpoints & False \\
+reproducibility & reproducibility.deterministic & True \\
+reproducibility & reproducibility.cudnn\_benchmark & False \\
+\bottomrule
+\end{tabular}
+\end{table}

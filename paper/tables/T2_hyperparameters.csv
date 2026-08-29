@@ -1,0 +1,36 @@
+section,key,value
+experiment_name,experiment_name,local_debug
+seeds,seeds,[0]
+device,device,cpu
+data,data.image_size,28
+data,data.num_workers,0
+data,data.batch_size,32
+data,data.specialties,"['PathMNIST', 'DermaMNIST', 'BloodMNIST']"
+data,data.data_root,./data_cache
+data,data.subsample_cap,2000
+data,data.val_fraction,0.1
+model,model.backbone,resnet18
+model,model.pretrained,True
+model,model.freeze_backbone,True
+model,model.lora.r,4
+model,model.lora.alpha,8
+model,model.lora.dropout,0.05
+model,model.lora.target_modules,"['conv1', 'layer1', 'layer2', 'layer3', 'layer4']"
+federated,federated.num_clients,3
+federated,federated.rounds,5
+federated,federated.local_epochs,1
+federated,federated.client_fraction,1.0
+federated,federated.optimizer,sgd
+federated,federated.lr,0.01
+federated,federated.momentum,0.9
+federated,federated.weight_decay,0.0001
+method,method.name,fedsaa
+method,method.fedsaa.tau,0.1
+method,method.fedsaa.lambda,0.5
+method,method.fedsaa.svd_rank,4
+method,method.fedprox.mu,0.01
+logging,logging.results_dir,./results
+logging,logging.log_every_round,1
+logging,logging.save_checkpoints,False
+reproducibility,reproducibility.deterministic,True
+reproducibility,reproducibility.cudnn_benchmark,False

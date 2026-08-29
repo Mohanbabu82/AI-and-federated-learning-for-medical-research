@@ -1,0 +1,61 @@
+# Real experiment config -- same schema as configs/local_debug.yaml, heavier settings.
+# Still CPU-only; run this after local_debug.yaml has been validated end-to-end.
+
+experiment_name: full_run
+
+seeds: [0, 1, 2]
+device: cpu
+
+data:
+  image_size: 28
+  num_workers: 0
+  batch_size: 32
+  # Cross-specialty non-IID: one specialty subset = one simulated hospital.
+  specialties:
+    - PathMNIST
+    - DermaMNIST
+    - BloodMNIST
+    - OCTMNIST
+    - TissueMNIST
+  data_root: ./data_cache
+  # No/relaxed cap for the real run.
+  subsample_cap: null
+  val_fraction: 0.1
+
+model:
+  backbone: resnet18
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    r: 4
+    alpha: 8
+    dropout: 0.05
+    target_modules: [conv1, layer1, layer2, layer3, layer4]
+
+federated:
+  num_clients: 5
+  rounds: 30   # reduced from 50 for a laptop-defensible publication budget -- see experiments/estimate.py
+  local_epochs: 2
+  client_fraction: 1.0   # fraction C of clients sampled by the server each round
+  optimizer: sgd
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+
+method:
+  name: fedsaa   # one of: fedsaa | fedavg | fedprox | local_only | centralized
+  fedsaa:
+    tau: 0.1
+    lambda: 0.5
+    svd_rank: 4
+  fedprox:
+    mu: 0.01
+
+logging:
+  results_dir: ./results
+  log_every_round: 1
+  save_checkpoints: false
+
+reproducibility:
+  deterministic: true
+  cudnn_benchmark: false

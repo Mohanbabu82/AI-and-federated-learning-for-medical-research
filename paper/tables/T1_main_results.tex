@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{Main results: mean$\pm$std across seeds. Best value per column in bold. Centralized/Local-only never communicate over a network (0 MB by construction).}
+\label{tab:main_results}
+\begin{tabular}{lccccc}
+\toprule
+Method & Global Acc. & Macro-F1 & AUC & Worst-client Acc. & Total Comm. (MB) \\
+\midrule
+Centralized & 0.319$\pm$0.000 & 0.058$\pm$0.000 & 0.499$\pm$0.000 & 0.090$\pm$0.000 & \textbf{0.00$\pm$0.00} \\
+Local-only & 0.567$\pm$0.000 & 0.375$\pm$0.000 & 0.868$\pm$0.000 & 0.448$\pm$0.000 & \textbf{0.00$\pm$0.00} \\
+FedAvg & 0.451$\pm$0.000 & 0.210$\pm$0.000 & 0.776$\pm$0.000 & 0.285$\pm$0.000 & 9.87$\pm$0.00 \\
+FedProx & 0.469$\pm$0.000 & 0.226$\pm$0.000 & 0.768$\pm$0.000 & 0.264$\pm$0.000 & 9.87$\pm$0.00 \\
+FedSAA (ours) & \textbf{0.685$\pm$0.000} & \textbf{0.443$\pm$0.000} & \textbf{0.878$\pm$0.000} & \textbf{0.678$\pm$0.000} & 9.87$\pm$0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}

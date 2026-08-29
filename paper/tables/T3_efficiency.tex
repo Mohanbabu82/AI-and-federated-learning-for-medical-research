@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{Efficiency: trainable parameter count (LoRA + one client head), per-round and total communication, and rounds needed to reach 90\% of that method's own best observed accuracy.}
+\label{tab:efficiency}
+\begin{tabular}{lcccc}
+\toprule
+Method & Trainable Params & MB/Round & Rounds to 90\\% of own best & Total Comm. (MB) \\
+\midrule
+Centralized & 148,309 & 0.000 & 1 & 0.00 \\
+Local-only & 148,309 & 0.000 & 1 & 0.00 \\
+FedAvg & 148,309 & 3.289 & 1 & 9.87 \\
+FedProx & 148,309 & 3.289 & 1 & 9.87 \\
+FedSAA (ours) & 148,309 & 3.289 & 3 & 9.87 \\
+\bottomrule
+\end{tabular}
+\end{table}

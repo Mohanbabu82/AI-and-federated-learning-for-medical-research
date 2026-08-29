@@ -1,0 +1,61 @@
+# Fast, CPU-friendly config for iterating on this laptop (i5-1235U, 8GB RAM, no GPU).
+# Same schema as configs/full_run.yaml -- only the values differ.
+
+experiment_name: local_debug
+
+seeds: [0]
+device: cpu
+
+data:
+  image_size: 28
+  num_workers: 0
+  batch_size: 32
+  # Cross-specialty non-IID: one specialty subset = one simulated hospital.
+  # Order matters -- client i gets specialties[i].
+  specialties:
+    - PathMNIST
+    - DermaMNIST
+    - BloodMNIST
+  data_root: ./data_cache
+  # Cap on #images sampled per client to keep this laptop's RAM usage low.
+  # Set to null (full_run.yaml) to disable the cap.
+  subsample_cap: 2000
+  val_fraction: 0.1
+
+model:
+  backbone: resnet18
+  pretrained: true
+  freeze_backbone: true
+  lora:
+    r: 4
+    alpha: 8
+    dropout: 0.05
+    target_modules: [conv1, layer1, layer2, layer3, layer4]
+
+federated:
+  num_clients: 3
+  rounds: 5
+  local_epochs: 1
+  client_fraction: 1.0   # fraction C of clients sampled by the server each round
+  optimizer: sgd
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+
+method:
+  name: fedsaa   # one of: fedsaa | fedavg | fedprox | local_only | centralized
+  fedsaa:
+    tau: 0.1          # softmax temperature over cosine similarity
+    lambda: 0.5        # blend between attended aggregate and global mean, 0=Ubar, 1=global
+    svd_rank: 4         # truncated SVD rank for re-factorizing Utilde back to (A, B)
+  fedprox:
+    mu: 0.01
+
+logging:
+  results_dir: ./results
+  log_every_round: 1
+  save_checkpoints: false
+
+reproducibility:
+  deterministic: true
+  cudnn_benchmark: false

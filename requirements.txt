@@ -1,0 +1,15 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch
+torchvision
+medmnist
+peft
+transformers
+numpy
+scikit-learn
+pandas
+matplotlib
+pyyaml
+tqdm
+psutil
