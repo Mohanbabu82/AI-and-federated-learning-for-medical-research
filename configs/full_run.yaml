@@ -27,7 +27,7 @@ model:
   pretrained: true
   freeze_backbone: true
   lora:
-    r: 4
+    r: 8   # ablation winner (Table T4): rank=8 gave the best accuracy/communication tradeoff
     alpha: 8
     dropout: 0.05
     target_modules: [conv1, layer1, layer2, layer3, layer4]
@@ -45,9 +45,10 @@ federated:
 method:
   name: fedsaa   # one of: fedsaa | fedavg | fedprox | local_only | centralized
   fedsaa:
-    tau: 0.1
+    # ablation winner (Table T4 / Step 14 sweep): lambda=0.5, tau=0.5, rank=8, client_fraction=1.0
+    tau: 0.5
     lambda: 0.5
-    svd_rank: 4
+    svd_rank: 8
   fedprox:
     mu: 0.01
 

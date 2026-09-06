@@ -11,6 +11,7 @@ import argparse
 import glob
 import os
 
+from experiments.validation import DebugRunError, assert_full_run
 from src.utils.config import load_config
 from src.viz.plots import (
     plot_accuracy_vs_comm,
@@ -82,11 +83,19 @@ def main() -> None:
     seed = cfg["seeds"][0]
     results_dir = cfg["logging"]["results_dir"]
     summary_dir = os.path.join(results_dir, "summary")
+    expected_rounds = cfg["federated"]["rounds"]
     apply_style()
 
     methods = ["centralized", "local_only", "fedavg", "fedprox", "fedsaa"]
     method_csv_paths = {m: _run_csv(cfg, m, seed) for m in methods
                          if os.path.exists(_run_csv(cfg, m, seed))}
+
+    # Never let a debug/smoke-test or incomplete run feed a paper figure -- fail loudly instead.
+    for m, path in method_csv_paths.items():
+        try:
+            assert_full_run(path, expected_rounds)
+        except DebugRunError as e:
+            raise DebugRunError(f"F1-F3 input rejected for method '{m}': {e}") from None
 
     written: list[str] = []
 
@@ -100,9 +109,11 @@ def main() -> None:
         fig = plot_per_specialty_bars(method_csv_paths, cfg["data"]["specialties"])
         written += save_fig(fig, args.out_dir, "F3_per_specialty_bars")
 
-    sim_files = sorted(glob.glob(os.path.join(results_dir, f"{cfg['experiment_name']}_fedsaa_seed{seed}",
+    fedsaa_run_dir = f"{cfg['experiment_name']}_fedsaa_seed{seed}"
+    sim_files = sorted(glob.glob(os.path.join(results_dir, fedsaa_run_dir,
                                                "similarity", "round_*.npz")))
     if sim_files:
+        assert_full_run(os.path.join(results_dir, fedsaa_run_dir, "metrics.csv"), expected_rounds)
         fig = plot_similarity_heatmap(sim_files[-1])
         written += save_fig(fig, args.out_dir, "F4_similarity_heatmap")
 
@@ -119,6 +130,8 @@ def main() -> None:
         for m in ["fedavg", "fedsaa"]
     }
     cka_dirs = {m: d for m, d in cka_dirs.items() if os.path.isdir(d) and glob.glob(os.path.join(d, "*.npy"))}
+    for m, d in cka_dirs.items():
+        assert_full_run(os.path.join(os.path.dirname(d), "metrics.csv"), expected_rounds)
     if cka_dirs:
         fig = plot_cka_collapse(cka_dirs)
         written += save_fig(fig, args.out_dir, "F7_collapse_cka")

@@ -9,9 +9,14 @@ import os
 
 import numpy as np
 
+from experiments.validation import assert_full_run
 
-def _read_final_row(csv_path: str) -> dict:
-    """Reads the last row of a run's metrics.csv (i.e. its final-round result)."""
+
+def _read_final_row(csv_path: str, expected_rounds: int) -> dict:
+    """Reads the last row of a run's metrics.csv (i.e. its final-round result). Asserts the run
+    is a legitimate, complete full_run_* result -- never a debug/smoke-test/interrupted one --
+    before it can feed any paper-facing summary."""
+    assert_full_run(csv_path, expected_rounds)
     with open(csv_path, newline="") as f:
         rows = list(csv.DictReader(f))
     if not rows:
@@ -47,10 +52,16 @@ def _summarize_group(final_rows: list[dict]) -> dict:
     }
 
 
-def aggregate_all(records: list[dict], summary_dir: str) -> tuple[str, str]:
+def aggregate_all(records: list[dict], summary_dir: str, expected_rounds: int) -> tuple[str, str]:
     """records: list of {group, method, seed, csv_path, lambda, tau, rank, client_fraction}.
     Writes summary_dir/methods_summary.csv (one row per method, mean+-std over seeds) and
     summary_dir/fedsaa_ablation_summary.csv (one row per FedSAA ablation config).
+
+    `expected_rounds` is required (not defaulted) so every caller must explicitly state the
+    full round count a legitimate run must have logged -- every record's csv_path is validated
+    via assert_full_run before it can contribute to either summary; a debug/smoke-test or
+    incomplete run raises DebugRunError instead of being silently included.
+
     Returns (methods_csv_path, ablation_csv_path).
     """
     os.makedirs(summary_dir, exist_ok=True)
@@ -70,7 +81,7 @@ def aggregate_all(records: list[dict], summary_dir: str) -> tuple[str, str]:
         writer = csv.DictWriter(f, fieldnames=method_fields)
         writer.writeheader()
         for method, recs in sorted(by_method.items()):
-            final_rows = [_read_final_row(r["csv_path"]) for r in recs]
+            final_rows = [_read_final_row(r["csv_path"], expected_rounds) for r in recs]
             summary = _summarize_group(final_rows)
             writer.writerow({"method": method, **summary})
 
@@ -89,7 +100,7 @@ def aggregate_all(records: list[dict], summary_dir: str) -> tuple[str, str]:
         writer.writeheader()
         for key, recs in sorted(by_ablation.items(), key=lambda kv: kv[0]):
             lam, tau, rank, frac = key
-            final_rows = [_read_final_row(r["csv_path"]) for r in recs]
+            final_rows = [_read_final_row(r["csv_path"], expected_rounds) for r in recs]
             summary = _summarize_group(final_rows)
             writer.writerow({"lambda": lam, "tau": tau, "rank": rank,
                               "client_fraction": frac, **summary})

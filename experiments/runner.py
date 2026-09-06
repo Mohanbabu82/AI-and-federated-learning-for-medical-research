@@ -13,6 +13,14 @@ results/_runner_checkpoint.json, so an interrupted full_run.yaml sweep (see
 without redoing finished work. Progress + ETA are logged to results/runner_progress.log after
 every run, and memory is freed (gc.collect()) between runs to keep this 8 GB laptop stable over
 a long sequential sweep.
+
+NOTE: the final aggregation step (experiments.aggregate.aggregate_all) refuses to summarize
+anything that isn't a full_run_*-prefixed, full-round-count result (experiments/validation.py).
+Running with --reduced (local_debug-style smoke tests) will therefore fail loudly at the
+aggregation step by design -- that mode is for proving the run/log pipeline works, not for
+producing paper-facing summaries/tables/figures. Use --skip-ablation with no --reduced flag if
+you just want to smoke-test the method-sweep execution path against configs/full_run.yaml
+without waiting for a full run.
 """
 
 from __future__ import annotations
@@ -111,7 +119,10 @@ def plan_sweep(base_cfg: dict, methods: list[str], method_seeds: list[int],
 
     if not skip_ablation:
         for lam, tau, rank, frac in _build_ablation_combos(grid):
-            tag = f"fedsaa_l{lam}_t{tau}_r{rank}_c{frac}"
+            # prefixed with the base experiment_name (e.g. "full_run") so ablation run
+            # directories are recognized as full_run_* by experiments.validation, not silently
+            # excluded from summaries/tables/figures the way local_debug_*/test_run_* runs are
+            tag = f"{base_cfg['experiment_name']}_fedsaa_l{lam}_t{tau}_r{rank}_c{frac}"
             for seed in ablation_seeds:
                 plan.append({
                     "run_key": f"{tag}:seed{seed}", "kind": "ablation", "method": "fedsaa",
@@ -185,7 +196,7 @@ def print_all_estimates(base_cfg: dict, methods: list[str], grid: dict, skip_abl
     for lam, tau, rank, frac in _build_ablation_combos(grid):
         cfg = copy.deepcopy(base_cfg)
         cfg["federated"]["client_fraction"] = frac
-        tag = f"fedsaa_l{lam}_t{tau}_r{rank}_c{frac}"
+        tag = f"{base_cfg['experiment_name']}_fedsaa_l{lam}_t{tau}_r{rank}_c{frac}"
         print(format_estimate(cfg, "fedsaa", label=tag))
 
 
@@ -233,7 +244,10 @@ def main() -> None:
 
     summary_dir = os.path.join(base_cfg["logging"]["results_dir"], "summary")
     os.makedirs(summary_dir, exist_ok=True)
-    methods_csv, ablation_csv = aggregate_all(records, summary_dir)
+    # expected_rounds enforces experiments.validation's full_run_* + full-round-count check on
+    # every record before it can land in a summary CSV -- see Step 14's DebugRunError guard.
+    methods_csv, ablation_csv = aggregate_all(records, summary_dir,
+                                               expected_rounds=base_cfg["federated"]["rounds"])
 
     print("=" * 90)
     print(f"Wrote method summary:   {methods_csv}")

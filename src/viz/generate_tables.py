@@ -13,6 +13,7 @@ import os
 
 import numpy as np
 
+from experiments.validation import assert_full_run
 from src.metrics.communication import rounds_to_target_accuracy
 from src.models.client_model import build_client_model, param_counts
 from src.utils.config import load_config
@@ -36,10 +37,13 @@ def _read_rows(csv_path: str) -> list[dict]:
 
 
 def _method_seed_finals(cfg: dict, method: str) -> list[dict]:
+    """Reads the final-round row for each seed's run, refusing (loudly) any run that isn't a
+    complete full_run_* result -- see experiments/validation.py."""
     finals = []
     for seed in cfg["seeds"]:
         path = _run_csv(cfg, method, seed)
         if os.path.exists(path):
+            assert_full_run(path, cfg["federated"]["rounds"])
             finals.append(_read_rows(path)[-1])
     return finals
 
@@ -159,6 +163,7 @@ def generate_t3_efficiency(cfg: dict, out_dir: str):
             path = _run_csv(cfg, method, seed)
             if not os.path.exists(path):
                 continue
+            assert_full_run(path, cfg["federated"]["rounds"])
             rows = _read_rows(path)
             finals_by_seed.append(rows[-1])
             if seed == cfg["seeds"][0]:
