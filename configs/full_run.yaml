@@ -49,6 +49,13 @@ method:
     tau: 0.5
     lambda: 0.5
     svd_rank: 8
+    # local adapter retention: final_i = (1 - alpha) * global_personalized_i + alpha * local_i
+    # (blends the server's aggregated result back toward each client's own pre-aggregation
+    # adapter, rather than fully overwriting it -- NOT yet validated by any run, see Step 15)
+    alpha: 0.3
+    # brief post-aggregation local fine-tune (SGD mini-batches, not full epochs) each
+    # participating client runs on its own data after retention-blending, before evaluation
+    post_agg_adapt_steps: 5
   fedprox:
     mu: 0.01
 

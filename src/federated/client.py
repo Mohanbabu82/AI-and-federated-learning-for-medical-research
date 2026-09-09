@@ -58,3 +58,46 @@ def local_train(model: nn.Module, train_loader, cfg: dict, device: torch.device,
 
     avg_loss = total_loss / n_samples if n_samples else float("nan")
     return get_adapter_state(model), n_samples, avg_loss
+
+
+def local_adapt_steps(model: nn.Module, train_loader, cfg: dict, device: torch.device,
+                       num_steps: int) -> float:
+    """A brief post-aggregation local fine-tuning pass: `num_steps` SGD mini-batches (not full
+    epochs) on `model`'s current (already-personalized) adapter + head, in place. Used after
+    FedSAA's server-side aggregation so each client actually adapts to its own data again
+    before evaluation -- otherwise "personalization" only happens at the server, never locally.
+
+    Returns the average training loss over the steps actually taken (0 if num_steps <= 0).
+    """
+    if num_steps <= 0:
+        return 0.0
+
+    fed_cfg = cfg["federated"]
+    model.to(device)
+    model.train()
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.SGD(
+        trainable_params,
+        lr=fed_cfg["lr"],
+        momentum=fed_cfg["momentum"],
+        weight_decay=fed_cfg["weight_decay"],
+    )
+    criterion = nn.CrossEntropyLoss()
+
+    total_loss, n_steps_taken = 0.0, 0
+    while n_steps_taken < num_steps:
+        for x, y in train_loader:
+            if n_steps_taken >= num_steps:
+                break
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            logits = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            n_steps_taken += 1
+
+    return total_loss / n_steps_taken if n_steps_taken else 0.0

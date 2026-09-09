@@ -79,7 +79,7 @@ def _validate(cfg: dict) -> None:
         raise ConfigError(f"Unknown method.name '{name}', expected one of {VALID_METHODS}")
     if name == "fedsaa":
         fsaa = _require(method, "fedsaa", "method")
-        for key in ["tau", "lambda", "svd_rank"]:
+        for key in ["tau", "lambda", "svd_rank", "alpha", "post_agg_adapt_steps"]:
             _require(fsaa, key, "method.fedsaa")
     if name == "fedprox":
         fprox = _require(method, "fedprox", "method")

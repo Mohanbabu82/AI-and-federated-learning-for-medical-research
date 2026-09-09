@@ -12,6 +12,22 @@ Unlike FedAvg, the result is PERSONALIZED: every participating client gets back 
 (A_i, B_i), not one shared global adapter. lambda=1 collapses Utilde_i to G for every client
 (independent of tau/w_ij), which is exactly "FedAvg on merged LoRA deltas" -- see
 tests/test_fedsaa.py for the equivalence check.
+
+Local adapter retention (step 7): the server-computed personalized adapter is then blended with
+each client's OWN pre-aggregation local adapter (the one it just sent, before this round's
+attention/SVD step touched it) via a retention coefficient alpha:
+
+    final_i = (1 - alpha) * global_personalized_i + alpha * local_i
+
+alpha=0 is pure FedSAA as before (fully replace with the server's result); alpha=1 would ignore
+the server's aggregation entirely and keep the client's own just-trained adapter. Applied per
+LoRA tensor (A and B separately, same shapes, simple elementwise blend).
+
+Post-aggregation local adaptation (this step): after retention-blending, each participating
+client runs a brief additional local fine-tuning pass (`local_adapt_steps`, a handful of SGD
+mini-batches, not a full epoch) on its own data before evaluation -- otherwise "personalization"
+would only ever happen at the server and the client's adapter would never actually see its own
+data again after being overwritten by the blended result.
 """
 
 from __future__ import annotations
@@ -24,7 +40,7 @@ import torch
 import torch.nn.functional as F
 
 from src.data.client_data import build_clients, build_global_test_loader
-from src.federated.client import local_train
+from src.federated.client import local_adapt_steps, local_train
 from src.federated.common import log_cka_this_round, rss_mb, run_dir, write_metrics_csv
 from src.metrics.cka import build_probe_batch
 from src.metrics.evaluation import evaluate_client, evaluate_global
@@ -39,10 +55,15 @@ def _layer_names(adapter_state: dict) -> list[str]:
     return sorted(k[: -len(LORA_A_SUFFIX)] for k in adapter_state if k.endswith(LORA_A_SUFFIX))
 
 
-def fedsaa_aggregate(adapter_states: list[dict], tau: float, lam: float, svd_rank: int):
+def fedsaa_aggregate(adapter_states: list[dict], tau: float, lam: float, svd_rank: int,
+                      alpha: float = 0.0):
     """Returns (per_client_states, similarity_by_layer).
 
-    per_client_states[i] is client i's new personalized (A, B) adapter state dict.
+    per_client_states[i] is client i's new personalized (A, B) adapter state dict, after local
+    adapter retention: final_i = (1 - alpha) * global_personalized_i + alpha * local_i, where
+    local_i = adapter_states[i] is that same client's own pre-aggregation adapter (the one it
+    sent into this call, before steps 1-6 below touched it). alpha=0 (default) is pure FedSAA
+    with no retention -- callers that want retention must pass alpha explicitly.
     similarity_by_layer[layer_name] is the (n_clients, n_clients) cosine similarity matrix S.
     """
     n = len(adapter_states)
@@ -91,8 +112,21 @@ def fedsaa_aggregate(adapter_states: list[dict], tau: float, lam: float, svd_ran
                 B_new = F.pad(B_new, (0, r - k))
                 A_new = F.pad(A_new, (0, 0, 0, r - k))
 
-            per_client_states[i][a_key] = A_new.reshape(a_shape).contiguous()
-            per_client_states[i][b_key] = B_new.reshape(b_shape).contiguous()
+            A_global = A_new.reshape(a_shape)
+            B_global = B_new.reshape(b_shape)
+
+            if alpha > 0.0:
+                # local adapter retention: blend the server's personalized result back toward
+                # this client's own pre-aggregation adapter, rather than fully overwriting it
+                A_local = adapter_states[i][a_key]
+                B_local = adapter_states[i][b_key]
+                A_final = (1.0 - alpha) * A_global + alpha * A_local
+                B_final = (1.0 - alpha) * B_global + alpha * B_local
+            else:
+                A_final, B_final = A_global, B_global
+
+            per_client_states[i][a_key] = A_final.contiguous()
+            per_client_states[i][b_key] = B_final.contiguous()
 
     return per_client_states, similarity_by_layer
 
@@ -102,6 +136,8 @@ def run_fedsaa(cfg: dict, seed: int):
     fed_cfg = cfg["federated"]
     saa_cfg = cfg["method"]["fedsaa"]
     tau, lam, svd_rank = saa_cfg["tau"], saa_cfg["lambda"], saa_cfg["svd_rank"]
+    alpha = saa_cfg["alpha"]                          # local adapter retention coefficient
+    post_agg_adapt_steps = saa_cfg["post_agg_adapt_steps"]  # brief local fine-tune after aggregation
 
     clients_data = build_clients(cfg, seed=seed)
     global_test_loader = build_global_test_loader(clients_data, cfg)
@@ -145,10 +181,19 @@ def run_fedsaa(cfg: dict, seed: int):
                                                              clients_data[cid].train_loader, cfg, device)
             collected_states.append(adapter_state)
 
-        new_personalized, similarity_by_layer = fedsaa_aggregate(collected_states, tau, lam, svd_rank)
+        new_personalized, similarity_by_layer = fedsaa_aggregate(
+            collected_states, tau, lam, svd_rank, alpha=alpha,
+        )
         for local_idx, cid in enumerate(participant_ids):
             personalized_states[cid] = new_personalized[local_idx]
             set_adapter_state(client_models[cid], personalized_states[cid])
+
+            # brief post-aggregation local adaptation: personalization is the point, so each
+            # client should actually fine-tune on its own data again after retention-blending,
+            # not just receive a server-computed adapter it never locally adapts further
+            local_adapt_steps(client_models[cid], clients_data[cid].train_loader, cfg, device,
+                               num_steps=post_agg_adapt_steps)
+            personalized_states[cid] = get_adapter_state(client_models[cid])
 
         np.savez(os.path.join(sim_dir, f"round_{round_idx:03d}.npz"), **similarity_by_layer)
 

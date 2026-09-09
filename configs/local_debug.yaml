@@ -48,6 +48,8 @@ method:
     tau: 0.1          # softmax temperature over cosine similarity
     lambda: 0.5        # blend between attended aggregate and global mean, 0=Ubar, 1=global
     svd_rank: 4         # truncated SVD rank for re-factorizing Utilde back to (A, B)
+    alpha: 0.3          # local adapter retention: final = (1-alpha)*global + alpha*local
+    post_agg_adapt_steps: 5   # local SGD mini-batches after aggregation, before evaluation
   fedprox:
     mu: 0.01
 
