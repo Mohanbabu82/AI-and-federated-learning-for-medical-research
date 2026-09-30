@@ -35,8 +35,33 @@ def load_config(path: str | Path) -> dict:
     with open(path, "r") as f:
         cfg = yaml.safe_load(f)
 
+    _resolve_dataset_preset(cfg)
     _validate(cfg)
     return cfg
+
+
+def _resolve_dataset_preset(cfg: dict) -> None:
+    """Optional multi-dataset support: if data.dataset_presets + data.active_dataset are set,
+    resolve data.specialties from the selected preset (in place) so every downstream consumer
+    (client_data.py, etc.) keeps reading the single data.specialties list unchanged. Configs
+    without dataset_presets (e.g. configs/local_debug.yaml) are unaffected.
+    """
+    data = cfg.get("data", {})
+    presets = data.get("dataset_presets")
+    active = data.get("active_dataset")
+    if presets is None and active is None:
+        return  # single-dataset config (no presets defined) -- nothing to resolve
+
+    if presets is None or active is None:
+        raise ConfigError(
+            "data.dataset_presets and data.active_dataset must both be set, or neither"
+        )
+    if active not in presets:
+        raise ConfigError(
+            f"data.active_dataset '{active}' not found in data.dataset_presets "
+            f"(known: {list(presets)})"
+        )
+    data["specialties"] = presets[active]
 
 
 def _validate(cfg: dict) -> None:

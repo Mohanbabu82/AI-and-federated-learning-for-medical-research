@@ -23,11 +23,18 @@ from torch.utils.data import Dataset
 
 # Display name (as used in configs/*.yaml) -> medmnist flag
 SPECIALTY_TO_FLAG = {
+    # Dataset A (original 5 specialties)
     "PathMNIST": "pathmnist",
     "DermaMNIST": "dermamnist",
     "BloodMNIST": "bloodmnist",
     "OCTMNIST": "octmnist",
     "TissueMNIST": "tissuemnist",
+    # Dataset B (second specialty mix -- same MedMNIST suite, no new external data source)
+    "OrganAMNIST": "organamnist",
+    "PneumoniaMNIST": "pneumoniamnist",
+    "RetinaMNIST": "retinamnist",
+    "BreastMNIST": "breastmnist",
+    "OrganCMNIST": "organcmnist",
 }
 
 

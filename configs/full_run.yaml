@@ -1,17 +1,35 @@
 # Real experiment config -- same schema as configs/local_debug.yaml, heavier settings.
-# Still CPU-only; run this after local_debug.yaml has been validated end-to-end.
+# device stays "cpu" in this committed file on purpose (this laptop has no CUDA GPU) -- flip it
+# to "cuda" locally if running on a GPU machine; do not commit that change back.
 
 experiment_name: full_run
 
-seeds: [0, 1, 2]
+seeds: [0, 1, 2, 3, 4]
 device: cpu
 
 data:
   image_size: 28
   num_workers: 0
   batch_size: 32
-  # Cross-specialty non-IID: one specialty subset = one simulated hospital.
-  specialties:
+  # Two selectable specialty mixes -- same MedMNIST suite both times, no new external data
+  # source. Cross-specialty non-IID: one specialty subset = one simulated hospital.
+  # `active_dataset` picks which preset populates `specialties` below (resolved by
+  # src/utils/config.py::load_config); override per-run via `experiments.runner --dataset A|B`.
+  dataset_presets:
+    A:   # original 5-specialty mix
+      - PathMNIST
+      - DermaMNIST
+      - BloodMNIST
+      - OCTMNIST
+      - TissueMNIST
+    B:   # second specialty mix
+      - OrganAMNIST
+      - PneumoniaMNIST
+      - RetinaMNIST
+      - BreastMNIST
+      - OrganCMNIST
+  active_dataset: A
+  specialties:   # resolved from dataset_presets[active_dataset] at load time -- do not edit directly
     - PathMNIST
     - DermaMNIST
     - BloodMNIST
@@ -34,7 +52,7 @@ model:
 
 federated:
   num_clients: 5
-  rounds: 30   # reduced from 50 for a laptop-defensible publication budget -- see experiments/estimate.py
+  rounds: 60
   local_epochs: 2
   client_fraction: 1.0   # fraction C of clients sampled by the server each round
   optimizer: sgd
@@ -58,6 +76,16 @@ method:
     post_agg_adapt_steps: 5
   fedprox:
     mu: 0.01
+
+  # FedSAA ablation grid (one-at-a-time around the defaults above, see experiments/runner.py):
+  #   lambda in {0, 0.25, 0.5, 0.75, 1}  -- FULL_ABLATION_AXES, 1 seed/config
+  #   tau    in {0.1, 0.5, 1}            -- FULL_ABLATION_AXES, 1 seed/config
+  #   rank   in {2, 4, 8, 16}            -- FULL_ABLATION_AXES, 1 seed/config
+  #   alpha  in {0, 0.1, 0.3, 0.5}       -- ALPHA_AXIS, 3 seeds/config (retention affects the
+  #                                         headline personalization claim, so gets more seeds)
+  # This grid is defined in code (not here) so it can be swept independently of which dataset
+  # preset is active; `python -m experiments.runner` builds and runs it automatically unless
+  # --skip-ablation is passed.
 
 logging:
   results_dir: ./results

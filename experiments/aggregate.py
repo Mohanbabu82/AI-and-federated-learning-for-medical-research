@@ -85,24 +85,27 @@ def aggregate_all(records: list[dict], summary_dir: str, expected_rounds: int) -
             summary = _summarize_group(final_rows)
             writer.writerow({"method": method, **summary})
 
-    # --- FedSAA ablation summary: group by (lambda, tau, rank, client_fraction) ---
+    # --- FedSAA ablation summary: group by (lambda, tau, rank, client_fraction, alpha) --
+    # alpha MUST be part of the key: without it, different-alpha runs sharing the same
+    # lambda/tau/rank/client_fraction (e.g. the alpha-sweep points, which all sit at the
+    # lambda/tau/rank default) would silently collapse into one row and average across alphas.
     by_ablation: dict[tuple, list[dict]] = {}
     for rec in records:
         if rec["lambda"] is None:
             continue
-        key = (rec["lambda"], rec["tau"], rec["rank"], rec["client_fraction"])
+        key = (rec["lambda"], rec["tau"], rec["rank"], rec["client_fraction"], rec["alpha"])
         by_ablation.setdefault(key, []).append(rec)
 
     ablation_csv = os.path.join(summary_dir, "fedsaa_ablation_summary.csv")
-    ablation_fields = ["lambda", "tau", "rank", "client_fraction"] + method_fields[1:]
+    ablation_fields = ["lambda", "tau", "rank", "client_fraction", "alpha"] + method_fields[1:]
     with open(ablation_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=ablation_fields)
         writer.writeheader()
         for key, recs in sorted(by_ablation.items(), key=lambda kv: kv[0]):
-            lam, tau, rank, frac = key
+            lam, tau, rank, frac, alpha = key
             final_rows = [_read_final_row(r["csv_path"], expected_rounds) for r in recs]
             summary = _summarize_group(final_rows)
             writer.writerow({"lambda": lam, "tau": tau, "rank": rank,
-                              "client_fraction": frac, **summary})
+                              "client_fraction": frac, "alpha": alpha, **summary})
 
     return methods_csv, ablation_csv

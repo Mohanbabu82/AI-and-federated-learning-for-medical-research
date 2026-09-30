@@ -45,10 +45,11 @@ from src.utils.seed import set_seed
 ALL_METHODS = ["centralized", "local_only", "fedavg", "fedprox", "fedsaa"]
 
 # One-at-a-time ablation around a fixed default: vary exactly one of lambda/tau/rank while
-# holding the other two (and client_fraction) at the default -- publication-defensible budget
-# for this 8 GB CPU laptop (see experiments/estimate.py), replacing the full
-# 5x3x4x2=120-config grid product used earlier.
-FULL_ABLATION_DEFAULT = {"lambda": 0.5, "tau": 0.5, "rank": 8, "client_fraction": 1.0}
+# holding the other two (and client_fraction, alpha) at the default -- publication-defensible
+# budget for this 8 GB CPU laptop (see experiments/estimate.py), replacing the full
+# 5x3x4x2=120-config grid product used earlier. These points run at ABLATION_SEEDS (1 seed each)
+# since they're one-at-a-time sensitivity checks, not headline numbers.
+FULL_ABLATION_DEFAULT = {"lambda": 0.5, "tau": 0.5, "rank": 8, "client_fraction": 1.0, "alpha": 0.3}
 FULL_ABLATION_AXES = {
     "lambda": [0, 0.25, 0.5, 0.75, 1],
     "tau": [0.1, 0.5, 1],
@@ -56,11 +57,18 @@ FULL_ABLATION_AXES = {
 }
 FULL_ABLATION_GRID = {"_mode": "oat", "default": FULL_ABLATION_DEFAULT, "axes": FULL_ABLATION_AXES}
 
+# Local adapter retention ablation: alpha in {0, 0.1, 0.3, 0.5} at the same lambda/tau/rank/
+# client_fraction default. Run at more seeds than the other OAT axes (3, not 1) since retention
+# directly affects the paper's headline personalization claim -- see Step 15/16.
+ALPHA_AXIS = [0, 0.1, 0.3, 0.5]
+ALPHA_SWEEP_N_SEEDS = 3
+
 REDUCED_ABLATION_GRID = {
     "lambda": [0, 0.5, 1],
     "tau": [0.1],
     "rank": [4],
     "client_fraction": [1.0],
+    "alpha": [0.3],
 }
 
 
@@ -84,9 +92,9 @@ def _run_method(cfg: dict, seed: int, method: str):
 
 
 def _oat_combos(default: dict, axes: dict) -> list[tuple]:
-    """One-at-a-time combos: the default point once, plus each axis swept with the other two
-    held at default -- deduplicated so the shared default point isn't run multiple times."""
-    keys = ["lambda", "tau", "rank", "client_fraction"]
+    """One-at-a-time combos: the default point once, plus each axis swept with the others held
+    at default -- deduplicated so the shared default point isn't run multiple times."""
+    keys = ["lambda", "tau", "rank", "client_fraction", "alpha"]
     seen: dict[tuple, None] = {}
     seen[tuple(default[k] for k in keys)] = None
     for axis, values in axes.items():
@@ -98,18 +106,39 @@ def _oat_combos(default: dict, axes: dict) -> list[tuple]:
 
 
 def _build_ablation_combos(grid: dict) -> list[tuple]:
+    """Returns (lambda, tau, rank, client_fraction, alpha) 5-tuples."""
     if grid.get("_mode") == "oat":
         return _oat_combos(grid["default"], grid["axes"])
-    return list(itertools.product(grid["lambda"], grid["tau"], grid["rank"], grid["client_fraction"]))
+    alphas = grid.get("alpha", [0.3])
+    return list(itertools.product(grid["lambda"], grid["tau"], grid["rank"],
+                                   grid["client_fraction"], alphas))
+
+
+def _build_alpha_ablation_plan(base_cfg: dict, default: dict, alpha_values: list, seeds: list[int]) -> list[dict]:
+    """Separate ablation axis: alpha in `alpha_values`, all other fedsaa hyperparams held at
+    `default`, each config run across `seeds` (more than the 1-seed lambda/tau/rank OAT points,
+    since retention directly affects the paper's headline personalization claim)."""
+    plan = []
+    for alpha in alpha_values:
+        tag = f"{base_cfg['experiment_name']}_fedsaa_alpha{alpha}"
+        overrides = {**default, "alpha": alpha}
+        for seed in seeds:
+            plan.append({
+                "run_key": f"{tag}:seed{seed}", "kind": "ablation", "method": "fedsaa",
+                "seed": seed, "tag": tag, "overrides": overrides,
+            })
+    return plan
 
 
 def plan_sweep(base_cfg: dict, methods: list[str], method_seeds: list[int],
-               ablation_seeds: list[int], grid: dict, skip_ablation: bool) -> list[dict]:
+               ablation_seeds: list[int], grid: dict, skip_ablation: bool,
+               alpha_axis: list | None = None, alpha_seeds: list[int] | None = None) -> list[dict]:
     """Builds the full list of planned runs (method sweep + ablation grid) as
     {run_key, kind, method, seed, cfg_overrides} without executing anything -- used both to
     know the total run count up front (for ETA) and to drive execution. Main methods run
-    `method_seeds` (never below 3 for main results); ablation points run `ablation_seeds`
-    (1 seed) since they're one-at-a-time sensitivity checks, not headline numbers.
+    `method_seeds` (never below 3 for main results); lambda/tau/rank ablation points run
+    `ablation_seeds` (1 seed) since they're one-at-a-time sensitivity checks, not headline
+    numbers; the alpha (retention) axis runs `alpha_seeds` (3 seeds) separately.
     """
     plan = []
     for method in methods:
@@ -118,7 +147,7 @@ def plan_sweep(base_cfg: dict, methods: list[str], method_seeds: list[int],
                          "method": method, "seed": seed, "overrides": {}})
 
     if not skip_ablation:
-        for lam, tau, rank, frac in _build_ablation_combos(grid):
+        for lam, tau, rank, frac, alpha in _build_ablation_combos(grid):
             # prefixed with the base experiment_name (e.g. "full_run") so ablation run
             # directories are recognized as full_run_* by experiments.validation, not silently
             # excluded from summaries/tables/figures the way local_debug_*/test_run_* runs are
@@ -127,8 +156,14 @@ def plan_sweep(base_cfg: dict, methods: list[str], method_seeds: list[int],
                 plan.append({
                     "run_key": f"{tag}:seed{seed}", "kind": "ablation", "method": "fedsaa",
                     "seed": seed, "tag": tag,
-                    "overrides": {"lambda": lam, "tau": tau, "rank": rank, "client_fraction": frac},
+                    "overrides": {"lambda": lam, "tau": tau, "rank": rank,
+                                  "client_fraction": frac, "alpha": alpha},
                 })
+
+        if alpha_axis and alpha_seeds:
+            default = grid["default"] if grid.get("_mode") == "oat" else FULL_ABLATION_DEFAULT
+            plan += _build_alpha_ablation_plan(base_cfg, default, alpha_axis, alpha_seeds)
+
     return plan
 
 
@@ -140,6 +175,7 @@ def _apply_overrides(cfg: dict, overrides: dict, tag: str | None) -> dict:
         cfg["method"]["fedsaa"]["svd_rank"] = overrides["rank"]
         cfg["model"]["lora"]["r"] = overrides["rank"]
         cfg["federated"]["client_fraction"] = overrides["client_fraction"]
+        cfg["method"]["fedsaa"]["alpha"] = overrides["alpha"]
         cfg["experiment_name"] = tag
     return cfg
 
@@ -179,8 +215,27 @@ def run_sweep(base_cfg: dict, plan: list[dict], resume: bool) -> list[dict]:
             "lambda": overrides.get("lambda"), "tau": overrides.get("tau"),
             "rank": overrides.get("rank"), "client_fraction": overrides.get("client_fraction",
                                             base_cfg["federated"]["client_fraction"]),
+            "alpha": overrides.get("alpha"),
         })
     return records
+
+
+def select_dataset(cfg: dict, dataset_key: str) -> dict:
+    """Switches `cfg` to one of `data.dataset_presets` (e.g. "A" or "B"), re-deriving
+    data.specialties and federated.num_clients, and tagging experiment_name so Dataset A and B
+    runs land in distinctly-named (still full_run_*-prefixed) result directories."""
+    presets = cfg.get("data", {}).get("dataset_presets")
+    if not presets:
+        raise ValueError(f"{cfg.get('experiment_name')}: config has no data.dataset_presets to select from")
+    if dataset_key not in presets:
+        raise ValueError(f"Unknown --dataset '{dataset_key}', expected one of {list(presets)}")
+
+    cfg = copy.deepcopy(cfg)
+    cfg["data"]["active_dataset"] = dataset_key
+    cfg["data"]["specialties"] = presets[dataset_key]
+    cfg["federated"]["num_clients"] = len(presets[dataset_key])
+    cfg["experiment_name"] = f"{cfg['experiment_name']}_{dataset_key}"
+    return cfg
 
 
 def load_checkpoint_csv(results_dir: str, run_key: str) -> str:
@@ -188,16 +243,21 @@ def load_checkpoint_csv(results_dir: str, run_key: str) -> str:
     return load_checkpoint(results_dir)["completed"][run_key]
 
 
-def print_all_estimates(base_cfg: dict, methods: list[str], grid: dict, skip_ablation: bool = False) -> None:
+def print_all_estimates(base_cfg: dict, methods: list[str], grid: dict, skip_ablation: bool = False,
+                         alpha_axis: list | None = None) -> None:
     for method in methods:
         print(format_estimate(base_cfg, method, label="method sweep"))
     if skip_ablation:
         return
-    for lam, tau, rank, frac in _build_ablation_combos(grid):
+    for lam, tau, rank, frac, _alpha in _build_ablation_combos(grid):
         cfg = copy.deepcopy(base_cfg)
         cfg["federated"]["client_fraction"] = frac
         tag = f"{base_cfg['experiment_name']}_fedsaa_l{lam}_t{tau}_r{rank}_c{frac}"
         print(format_estimate(cfg, "fedsaa", label=tag))
+    if alpha_axis:
+        for alpha in alpha_axis:
+            tag = f"{base_cfg['experiment_name']}_fedsaa_alpha{alpha}"
+            print(format_estimate(base_cfg, "fedsaa", label=tag))
 
 
 def main() -> None:
@@ -211,33 +271,47 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true",
                          help="Skip any (method/ablation-config, seed) run already recorded "
                               "complete in results/_runner_checkpoint.json.")
+    parser.add_argument("--dataset", default=None,
+                         help="Select a data.dataset_presets key (e.g. A or B) when the config "
+                              "defines multiple specialty mixes. Runs one dataset per invocation "
+                              "-- to cover both, run this command twice with --dataset A and "
+                              "--dataset B. Omit for configs with a single fixed specialties list.")
     args = parser.parse_args()
 
     base_cfg = load_config(args.config)
     assert base_cfg["data"]["num_workers"] == 0, "num_workers must be 0 on this laptop"
+
+    if args.dataset:
+        base_cfg = select_dataset(base_cfg, args.dataset)
 
     if args.reduced:
         base_cfg = copy.deepcopy(base_cfg)
         base_cfg["seeds"] = base_cfg["seeds"][:1]
         base_cfg["federated"]["rounds"] = args.rounds_override or 2
         grid = REDUCED_ABLATION_GRID
+        alpha_axis = None  # skip the 3-seed alpha sweep in smoke-test mode
     else:
         if args.rounds_override:
             base_cfg["federated"]["rounds"] = args.rounds_override
         grid = FULL_ABLATION_GRID
+        alpha_axis = ALPHA_AXIS
 
     method_seeds = base_cfg["seeds"]              # main results: never below 3 seeds
-    ablation_seeds = base_cfg["seeds"][:1]         # one-at-a-time ablation points: 1 seed each
+    ablation_seeds = base_cfg["seeds"][:1]         # one-at-a-time lambda/tau/rank points: 1 seed
+    alpha_seeds = base_cfg["seeds"][:ALPHA_SWEEP_N_SEEDS] if alpha_axis else []  # alpha axis: 3 seeds
 
     print("=" * 90)
     print(f"Experiment sweep -- config={args.config}  reduced={args.reduced}  "
           f"method_seeds={method_seeds}  ablation_seeds={ablation_seeds}  "
+          f"alpha_axis={alpha_axis}  alpha_seeds={alpha_seeds}  "
           f"rounds={base_cfg['federated']['rounds']}  resume={args.resume}")
     print("=" * 90)
 
-    print_all_estimates(base_cfg, ALL_METHODS, grid, skip_ablation=args.skip_ablation)
+    print_all_estimates(base_cfg, ALL_METHODS, grid, skip_ablation=args.skip_ablation,
+                         alpha_axis=alpha_axis)
 
-    plan = plan_sweep(base_cfg, ALL_METHODS, method_seeds, ablation_seeds, grid, args.skip_ablation)
+    plan = plan_sweep(base_cfg, ALL_METHODS, method_seeds, ablation_seeds, grid, args.skip_ablation,
+                       alpha_axis=alpha_axis, alpha_seeds=alpha_seeds)
     print(f"\nTotal planned runs: {len(plan)}")
 
     records = run_sweep(base_cfg, plan, resume=args.resume)
