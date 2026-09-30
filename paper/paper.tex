@@ -13,6 +13,7 @@
 % this is a generic article skeleton so it compiles standalone with pdflatex.
 
 \newcommand{\todo}[1]{\textcolor{red}{\textbf{TODO: #1}}}
+\newcommand{\todoresults}[1]{\textcolor{red}{\textbf{[TODO: results -- #1]}}}
 
 \title{Communication-Efficient Federated Fine-Tuning of Medical Foundation Models\\
 under Cross-Specialty Heterogeneity}
@@ -22,23 +23,34 @@ under Cross-Specialty Heterogeneity}
 \begin{document}
 \maketitle
 
+% STATUS: this draft covers Abstract/Introduction/Related Work/Method/Setup only. Results,
+% Ablations, Limitations, and Conclusion are intentionally left as \todoresults{} placeholders --
+% no run of configs/full_run.yaml has completed at time of writing. Do not fill in numbers by
+% hand; regenerate via experiments/runner.py + src/viz/generate_{figures,tables}.py once real
+% full_run_* results exist and pass experiments/validation.py::assert_full_run.
+
 \begin{abstract}
 Federated fine-tuning lets multiple hospitals collaboratively adapt a shared medical imaging
 backbone without pooling patient data, but cross-specialty heterogeneity -- where each hospital's
 data distribution reflects a different medical specialty rather than a random partition of one
 distribution -- breaks the implicit i.i.d.\ assumption behind naive aggregation schemes like
-FedAvg. We study this setting with a fully simulated, CPU-only pipeline: five MedMNIST specialty
-subsets (pathology, dermatology, blood, retina, kidney tissue) stand in for five hospitals, and
-each client fine-tunes a frozen pretrained image backbone via LoRA adapters, communicating only
-the low-rank adapter factors. We propose \textbf{FedSAA} (Similarity-Attended Aggregation), which
-forms each client's merged LoRA delta $U_i = B_iA_i$, computes a softmax-attention aggregate over
-other clients' deltas weighted by cosine similarity, blends it with the uniform mean via a
-$\lambda$ parameter, and re-factorizes the result to a personalized rank-$r$ adapter per client
-via truncated SVD. FedSAA reduces exactly to FedAvg-on-merged-deltas at $\lambda=1$ (proved in
-\texttt{tests/test\_fedsaa.py}). On our \texttt{local\_debug} smoke configuration, FedSAA improves
-global accuracy, macro-F1, AUC, and worst-client accuracy over FedAvg and FedProx at identical
-communication cost. \todo{replace/extend once full\_run.yaml results are in -- current numbers
-are from the reduced debug pipeline, not the intended full-scale experiment.}
+FedAvg. We study this setting with a fully simulated, CPU-compatible pipeline across
+\textbf{two} independent specialty mixes drawn from MedMNIST: Dataset A (pathology, dermatology,
+blood, retina, kidney tissue) and Dataset B (abdominal organ, chest pneumonia, retina fundus,
+breast ultrasound, abdominal organ-C), each mapped to five simulated hospitals. Each client
+fine-tunes a frozen pretrained image backbone via LoRA adapters, communicating only the low-rank
+adapter factors. We propose \textbf{FedSAA} (Similarity-Attended Aggregation), which forms each
+client's merged LoRA delta $U_i = B_iA_i$, computes a softmax-attention aggregate over other
+clients' deltas weighted by cosine similarity, blends it with the uniform mean via a $\lambda$
+parameter, re-factorizes the result to a personalized rank-$r$ adapter per client via truncated
+SVD, and then blends that server-computed adapter back toward the client's own pre-aggregation
+adapter via a retention coefficient $\alpha$, followed by a brief additional local fine-tuning
+pass. FedSAA reduces exactly to FedAvg-on-merged-deltas at $\lambda=1$ (proved in
+\texttt{tests/test\_fedsaa.py}).
+\todoresults{global accuracy, macro-F1, AUC, worst-client accuracy, and communication cost for
+FedSAA vs.\ Centralized/Local-only/FedAvg/FedProx on both datasets, with statistical significance
+across 5 seeds, once configs/full\_run.yaml has been run to completion.}
+\todoresults{ablation findings for $\lambda$, $\tau$, rank $r$, and retention $\alpha$.}
 \end{abstract}
 
 \section{Introduction}
@@ -49,15 +61,23 @@ FedSAA fills relative to FedAvg/FedProx.}
 
 Contributions (as implemented in this codebase):
 \begin{enumerate}
-  \item A CPU-only, fully reproducible simulation harness (\texttt{src/data}, \texttt{src/models},
-    \texttt{src/federated}) mapping five MedMNIST specialty subsets to five simulated hospitals
-    under a shared config schema (\texttt{configs/local\_debug.yaml}, \texttt{configs/full\_run.yaml}).
-  \item \textbf{FedSAA} (\texttt{src/federated/fedsaa.py}), a similarity-attended LoRA aggregation
-    rule that personalizes each client's adapter via softmax attention over cosine similarity of
-    merged LoRA deltas, with a provable reduction to FedAvg at $\lambda=1$.
+  \item A CPU-compatible, fully reproducible simulation harness (\texttt{src/data},
+    \texttt{src/models}, \texttt{src/federated}) mapping MedMNIST specialty subsets to simulated
+    hospitals under a shared config schema, with \textbf{two independently selectable specialty
+    mixes} (Dataset A / Dataset B, \texttt{configs/full\_run.yaml}'s \texttt{data.dataset\_presets})
+    so results can be checked for consistency across two different cross-specialty non-IID
+    partitions rather than one.
+  \item \textbf{FedSAA} (\texttt{src/federated/fedsaa.py}), a similarity-attended LoRA
+    aggregation rule that personalizes each client's adapter via softmax attention over cosine
+    similarity of merged LoRA deltas, with a provable reduction to FedAvg at $\lambda=1$, plus a
+    \textbf{local adapter retention} mechanism (coefficient $\alpha$) and a brief
+    \textbf{post-aggregation local adaptation} step so personalization happens on the client side
+    too, not only at the server.
   \item An evaluation suite (\texttt{src/metrics}) covering accuracy/macro-F1/AUC, communication
     accounting, and linear-CKA representation-collapse tracking, plus an ablation and
-    table/figure generation pipeline (\texttt{experiments/}, \texttt{src/viz/}).
+    table/figure generation pipeline (\texttt{experiments/}, \texttt{src/viz/}) that refuses
+    (loudly) to summarize anything but complete, full-scale runs
+    (\texttt{experiments/validation.py}).
 \end{enumerate}
 \todo{add 1-2 more paragraphs of narrative framing / related-work teaser.}
 
@@ -72,21 +92,22 @@ under statistical heterogeneity. Both are implemented here as baselines
 
 \subsection{LoRA / Parameter-Efficient Fine-Tuning (PEFT)}
 LoRA~\cite{hu2021lora} freezes a pretrained backbone and injects trainable low-rank factors
-$(A,B)$ into target layers -- in our setup, 148{,}309 trainable parameters (1.31\% of the
-11.3M-parameter ResNet-18 + head) per client, and a 0.548\,MB adapter payload (Table~\ref{tab:efficiency}).
-Naively averaging LoRA factors $(A_i,B_i)$ directly is a biased approximation of averaging the
-effective weight update; FedSAA's $\lambda=1$ case is explicitly defined at the level of merged
-deltas $U_i=B_iA_i$ to sidestep this (Section~\ref{sec:method-fedavg-equiv}).
+$(A,B)$ into target layers, drastically reducing trainable/communicated parameters relative to
+full fine-tuning. Naively averaging LoRA factors $(A_i,B_i)$ directly is a biased approximation
+of averaging the effective weight update; FedSAA's $\lambda=1$ case is explicitly defined at the
+level of merged deltas $U_i=B_iA_i$ to sidestep this (Section~\ref{sec:method-fedavg-equiv}).
 
 \subsection{Federated Learning in Medical Imaging}
 \todo{cite medical FL surveys / cross-silo hospital FL work; discuss how those typically assume a
 shared task/label space, unlike our cross-specialty setting where each client has a different
-specialty and different \#classes (Table~\ref{tab:hyperparameters}).}
+specialty and a different \#classes (Section~\ref{sec:setup}).}
 
 \subsection{Personalized Federated Learning}
 FedSAA produces a genuinely personalized adapter per client (unlike FedAvg/FedProx's single
-global adapter) via attention over client similarity. \todo{cite personalized/clustered-FL
-baselines and position FedSAA's per-layer, per-round attention mechanism relative to them.}
+global adapter) via attention over client similarity, further personalized by the local
+retention blend and post-aggregation local adaptation
+(Sections~\ref{sec:method-retention}-\ref{sec:method-postadapt}). \todo{cite personalized/
+clustered-FL baselines and position FedSAA's mechanism relative to them.}
 
 \section{Method: FedSAA (Similarity-Attended Aggregation)}
 \label{sec:method}
@@ -101,14 +122,14 @@ local training. Per round, per layer, the server
   w_{ij} &= \mathrm{softmax}_j\!\left(S_{ij} / \tau\right) \label{eq:attn} \\
   \bar{U}_i &= \sum_j w_{ij} U_j, \qquad G = \frac{1}{n}\sum_j U_j \label{eq:agg} \\
   \tilde{U}_i &= (1-\lambda)\,\bar{U}_i + \lambda\, G \label{eq:blend} \\
-  (A_i, B_i)_{\text{new}} &= \mathrm{TruncatedSVD}_r(\tilde{U}_i) \label{eq:svd}
+  (A_i, B_i)_{\text{global}} &= \mathrm{TruncatedSVD}_r(\tilde{U}_i) \label{eq:svd}
 \end{align}
 
 where step~\eqref{eq:svd} re-factorizes $\tilde{U}_i$ via truncated rank-$r$ SVD:
-$B_{i,\text{new}} = U_{\text{svd}}[:,{:}r]\sqrt{S_{\text{svd}}[{:}r]}$,
-$A_{i,\text{new}} = \sqrt{S_{\text{svd}}[{:}r]}\,V_{\text{svd}}^\top[{:}r,:]$, reshaped back to
-conv-kernel shape. Unlike FedAvg/FedProx, \textbf{the result is personalized}: every client gets
-back its own $(A_i,B_i)$, not one broadcast global adapter.
+$B_{\text{global}} = U_{\text{svd}}[:,{:}r]\sqrt{S_{\text{svd}}[{:}r]}$,
+$A_{\text{global}} = \sqrt{S_{\text{svd}}[{:}r]}\,V_{\text{svd}}^\top[{:}r,:]$, reshaped back to
+conv-kernel shape. Unlike FedAvg, the result at this point is already \textbf{personalized}:
+every client would get back its own $(A_i,B_i)$, not one broadcast global adapter.
 
 \subsection{Client-local training}
 Each client trains its LoRA adapter + local classifier head for \texttt{local\_epochs} epochs of
@@ -117,187 +138,170 @@ communicated, since specialties have different numbers of classes.
 
 \subsection{Communication accounting}
 Only the LoRA $(A,B)$ factors are exchanged
-(\texttt{get\_adapter\_state}/\texttt{set\_adapter\_state}) -- 0.548\,MB per client per round at
-rank $r{=}4$ (Table~\ref{tab:efficiency}), independent of the frozen backbone's 11.3M parameters.
+(\texttt{get\_adapter\_state}/\texttt{set\_adapter\_state}), independent of the frozen backbone's
+parameters, which never move.
 
 \subsection{FedAvg as a special case}
 \label{sec:method-fedavg-equiv}
 At $\lambda=1$, $\tilde{U}_i = G$ for \emph{every} client, independent of $\tau$ or $w_{ij}$ --
-i.e.\ FedSAA collapses to the rank-$r$ truncated SVD of the plain mean of merged deltas
-$\frac{1}{n}\sum_j B_jA_j$: exactly ``FedAvg on merged LoRA deltas.'' Verified to floating-point
-precision across multiple $\tau$ values in
+i.e.\ steps~\eqref{eq:merge}--\eqref{eq:svd} collapse to the rank-$r$ truncated SVD of the plain
+mean of merged deltas $\frac{1}{n}\sum_j B_jA_j$: exactly ``FedAvg on merged LoRA deltas.''
+Verified to floating-point precision across multiple $\tau$ values in
 \texttt{tests/test\_fedsaa.py::test\_lambda1\_matches\_fedavg\_on\_merged\_deltas}. At
 $\lambda=0$, clients receive purely self-attended, personalized aggregates that are (by
 construction) generally distinct across clients.
 
-\todo{add a paragraph interpreting why similarity-attention should help under cross-specialty
-heterogeneity -- e.g.\ clients with more-similar specialties reinforce each other's updates while
-dissimilar clients contribute less, which uniform FedAvg cannot express.}
+\subsection{Local adapter retention}
+\label{sec:method-retention}
+The server-computed personalized adapter $(A_i,B_i)_{\text{global}}$ from
+step~\eqref{eq:svd} is then blended with client $i$'s \textbf{own pre-aggregation local adapter}
+-- the one it sent into this round's aggregation, before
+steps~\eqref{eq:merge}--\eqref{eq:svd} touched it, denoted $(A_i,B_i)_{\text{local}}$ -- via a
+retention coefficient $\alpha \in [0,1]$:
+\begin{equation}
+  (A_i, B_i)_{\text{final}} = (1-\alpha)\,(A_i,B_i)_{\text{global}} + \alpha\,(A_i,B_i)_{\text{local}}
+  \label{eq:retention}
+\end{equation}
+applied per LoRA tensor ($A$ and $B$ separately, same shapes, elementwise). $\alpha=0$ is pure
+FedSAA (Sections~\ref{sec:method}--\ref{sec:method-fedavg-equiv}, no retention); $\alpha \to 1$
+increasingly ignores the server's aggregation and keeps the client's own just-trained adapter.
+Implemented in \texttt{src/federated/fedsaa.py::fedsaa\_aggregate} (the \texttt{alpha} parameter).
 
-\section{Setup}
+\subsection{Post-aggregation local adaptation}
+\label{sec:method-postadapt}
+After retention-blending, each participating client runs a brief additional local fine-tuning
+pass -- \texttt{post\_agg\_adapt\_steps} SGD mini-batches (not a full epoch) on its own data
+(\texttt{src/federated/client.py::local\_adapt\_steps}) -- before evaluation. Without this step,
+``personalization'' would only ever happen at the server; the client's adapter would never
+actually see its own data again after being overwritten by the retention-blended result.
+
+\todo{add a paragraph interpreting why similarity-attention plus local retention should help
+under cross-specialty heterogeneity -- e.g.\ clients with more-similar specialties (by
+merged-delta cosine similarity) reinforce each other's updates while dissimilar clients
+contribute less, and retention + post-aggregation adaptation prevents the server-side
+aggregation step from ever fully overwriting a client's own signal.}
+
+\section{Experimental Setup}
 \label{sec:setup}
 
-\subsection{Datasets (cross-specialty non-IID simulation)}
-Five MedMNIST subsets, each standing in for one simulated hospital: PathMNIST (pathology),
-DermaMNIST (dermatology), BloodMNIST (blood), OCTMNIST (retina), TissueMNIST (kidney tissue).
-\textbf{100\% simulation; no real patient data is used anywhere in this pipeline.} Images are
-converted grayscale$\to$3-channel RGB and loaded at $28\times28$; a per-client subsample cap
-keeps peak RAM low on an 8\,GB laptop (memory-mapped .npz loading, full arrays never
-materialized).
+Source of truth for every value below: \texttt{configs/full\_run.yaml}. Table~\ref{tab:hyperparameters}
+(once generated) is produced directly from it.
+
+\subsection{Datasets (two independent cross-specialty non-IID partitions)}
+All experiments are simulation-based; \textbf{no real patient data is used anywhere in this
+pipeline.} Two independently selectable specialty mixes are drawn from MedMNIST, each mapping
+five specialty subsets to five simulated hospitals (\texttt{data.dataset\_presets}):
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Client & Dataset A & Dataset B \\
+\midrule
+0 & PathMNIST (pathology, 9 cls.) & OrganAMNIST (abdominal organ, 11 cls.) \\
+1 & DermaMNIST (dermatology, 7 cls.) & PneumoniaMNIST (chest pneumonia, 2 cls.) \\
+2 & BloodMNIST (blood, 8 cls.) & RetinaMNIST (retina fundus, 5 cls.) \\
+3 & OCTMNIST (retina OCT, 4 cls.) & BreastMNIST (breast ultrasound, 2 cls.) \\
+4 & TissueMNIST (kidney tissue, 8 cls.) & OrganCMNIST (abdominal organ, 11 cls.) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both mixes draw exclusively from the MedMNIST v2 suite (no new external data source). Images are
+converted grayscale$\to$3-channel RGB and loaded at $28\times28$; no per-client subsample cap is
+applied for the full run, unlike the \texttt{configs/local\_debug.yaml} smoke-test profile.
 
 \subsection{Backbone and adapters}
 Frozen pretrained \textbf{ResNet-18}; LoRA attached to \texttt{conv1} and every Conv2d inside
-\texttt{layer1}--\texttt{layer4}, rank $r{=}4$, $\alpha{=}8$, dropout$=0.05$. Each client keeps
-its own classifier head, never aggregated.
+\texttt{layer1}--\texttt{layer4}, rank $r{=}8$, $\alpha_{\text{LoRA}}{=}8$, dropout$=0.05$ (this
+$\alpha_{\text{LoRA}}$ is the standard LoRA scaling factor, unrelated to FedSAA's retention
+$\alpha$, Section~\ref{sec:method-retention}). Each client keeps its own classifier head, never
+aggregated.
 
 \subsection{Federated protocol}
-3 clients, 5 rounds, 1 local epoch, client fraction $C{=}1.0$; local SGD, lr$=0.01$,
-momentum$=0.9$, weight decay$=10^{-4}$. FedSAA: $\tau=0.1$, $\lambda=0.5$, \texttt{svd\_rank}$=4$;
-FedProx: $\mu=0.01$.
+5 clients, 60 rounds, 2 local epochs, client fraction $C{=}1.0$ (full participation); local SGD,
+lr$=0.01$, momentum$=0.9$, weight decay$=10^{-4}$.
 
-Full hyperparameter dump: Table~\ref{tab:hyperparameters} (auto-generated from the active
-config). \texttt{configs/full\_run.yaml} (5 clients, 50 rounds, 3 seeds, no subsample cap) is the
-intended real experiment -- see Limitations (Section~\ref{sec:limitations}).
+\subsection{FedSAA hyperparameters}
+$\tau=0.5$, $\lambda=0.5$, \texttt{svd\_rank}$=8$; local adapter retention $\alpha=0.3$
+(Section~\ref{sec:method-retention}); post-aggregation local adaptation
+\texttt{post\_agg\_adapt\_steps}$=5$ (Section~\ref{sec:method-postadapt}). FedProx baseline:
+$\mu=0.01$.
 
-\input{tables/T2_hyperparameters.tex}
+\subsection{Seeds and reproducibility}
+5 seeds ($\{0,1,2,3,4\}$) for every method on every dataset, deterministic seeding.
+
+\subsection{FedSAA ablation grid}
+One-at-a-time sweeps around the defaults above:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Axis & Values & Seeds/config \\
+\midrule
+$\lambda$ & $\{0, 0.25, 0.5, 0.75, 1\}$ & 1 \\
+$\tau$ & $\{0.1, 0.5, 1\}$ & 1 \\
+rank $r$ & $\{2, 4, 8, 16\}$ & 1 \\
+retention $\alpha$ & $\{0, 0.1, 0.3, 0.5\}$ & 3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The retention axis runs more seeds than the others because it directly affects the paper's
+personalization claim (Sections~\ref{sec:method-retention}--\ref{sec:method-postadapt}). The
+grid is one-at-a-time, not a full product, to keep the sweep tractable on commodity hardware.
 
 \subsection{Baselines}
 Centralized (upper bound: one shared LoRA adapter trained jointly on pooled data), Local-only
 (lower bound: no communication ever), FedAvg and FedProx, all logging the identical
-\texttt{metrics.csv} schema as FedSAA for direct comparison.
+\texttt{metrics.csv} schema as FedSAA for direct comparison, on both Dataset A and Dataset B.
+
+\subsection{Hardware and environment}
+Developed and smoke-tested on a CPU-only machine (no CUDA GPU); \texttt{configs/full\_run.yaml}'s
+\texttt{device: cpu} reflects that -- flip to \texttt{cuda} locally to run on a GPU machine.
 
 \section{Results}
-\label{sec:results}
-
-\todo{numbers below come from \texttt{configs/local\_debug.yaml} (3 clients, $\leq$3 rounds, 1
-seed, 2000-image subsample cap) -- a pipeline smoke-test config, NOT the intended full-scale
-experiment. Re-run with \texttt{configs/full\_run.yaml} and regenerate before drawing real
-conclusions.}
+\todoresults{this section requires a completed run of configs/full\_run.yaml (both datasets, 5
+seeds, 60 rounds, full ablation grid). No such run has completed at time of writing. Once
+experiments/runner.py has produced full\_run\_* results that pass
+experiments/validation.py::assert\_full\_run, regenerate Tables T1/T3/T4 via
+src/viz/generate\_tables.py, Figures F1-F7 via src/viz/generate\_figures.py, run paired
+statistical tests across the 5 seeds (FedSAA vs.\ each baseline, global accuracy and macro-F1,
+both datasets), and write this section from those outputs. Do not fill in numbers by hand.}
 
 \subsection{Main results}
-
-\input{tables/T1_main_results.tex}
-
-Figure~\ref{fig:f1} shows global accuracy vs.\ round for all five methods. Figure~\ref{fig:f2}
-plots accuracy against cumulative communication. Figure~\ref{fig:f3} breaks accuracy out per
-specialty.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.75\linewidth]{figures/F1_convergence.pdf}
-  \caption{Convergence: global test accuracy vs.\ round.}
-  \label{fig:f1}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.75\linewidth]{figures/F2_accuracy_vs_comm.pdf}
-  \caption{Accuracy vs.\ cumulative communication (MB).}
-  \label{fig:f2}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.9\linewidth]{figures/F3_per_specialty_bars.pdf}
-  \caption{Final-round per-specialty accuracy, by method.}
-  \label{fig:f3}
-\end{figure}
-
-\todo{interpret the Centralized baseline's poor performance -- this reflects an optimization
-instability (single shared LoRA adapter, unscheduled lr=0.01 SGD on pooled heterogeneous
-batches) flagged during pipeline development, not a fundamental ceiling; revisit with a
-tuned/decayed LR before treating Centralized as a true upper bound.}
+\todoresults{Table T1, Figures F1-F3, both datasets.}
 
 \subsection{Efficiency}
-
-\input{tables/T3_efficiency.tex}
-
-\todo{``rounds to 90\% of own best'' is relative to each method's own final accuracy, not a
-shared absolute target -- useful for convergence speed, not cross-method accuracy comparison
-(that is Table~\ref{tab:main_results}).}
+\todoresults{Table T3.}
 
 \subsection{Ablations}
-
-\input{tables/T4_ablations.tex}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.7\linewidth]{figures/F4_similarity_heatmap.pdf}
-  \caption{FedSAA client similarity matrix $S$ (mean over 20 LoRA layers, final round).}
-  \label{fig:f4}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.7\linewidth]{figures/F5_lambda_ablation.pdf}
-  \caption{FedSAA $\lambda$ ablation.}
-  \label{fig:f5}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.7\linewidth]{figures/F6_rank_ablation.pdf}
-  \caption{FedSAA rank $r$ ablation (accuracy vs.\ communication trade-off).}
-  \label{fig:f6}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.7\linewidth]{figures/F7_collapse_cka.pdf}
-  \caption{Representation collapse (mean pairwise client CKA vs.\ round), FedSAA vs.\ FedAvg.}
-  \label{fig:f7}
-\end{figure}
-
-\todo{with only 2-3 points per ablation axis and 1 seed, none of these trends are statistically
-meaningful yet -- they demonstrate the ablation \emph{pipeline} works
-(\texttt{experiments/runner.py}'s full grid: $\lambda\in\{0,0.25,0.5,0.75,1\}$,
-$\tau\in\{0.1,0.5,1\}$, $r\in\{2,4,8,16\}$, $C\in\{0.5,1.0\}$ = 120 configs) but the full grid
-$\times$ 3 seeds under \texttt{full\_run.yaml} has not been run. Interpret Figures~\ref{fig:f5}--\ref{fig:f7}
-and insert your own reading once it has.}
+\todoresults{Table T4, Figures F4-F7, including the retention $\alpha$ ablation.}
 
 \section{Limitations}
-\label{sec:limitations}
-
+\todoresults{write from the actual completed-run outcome. Known structural limitations to
+include regardless of results (do not remove when filling in):}
 \begin{itemize}
-  \item \textbf{All numbers in this draft come from \texttt{configs/local\_debug.yaml}}: 3
-    clients (not 5), a 2000-image-per-client subsample cap, and at most 3 rounds with a single
-    seed -- deliberately tiny to prove the pipeline end-to-end on an 8\,GB CPU-only laptop.
-    \texttt{configs/full\_run.yaml} is the intended real configuration and has not yet been run.
-  \item \textbf{Single seed.} Every std-dev in Tables~\ref{tab:main_results}--\ref{tab:ablations}
-    is 0.0 because \texttt{seeds=[0]} only -- no variance estimate exists yet.
-  \item \textbf{Centralized baseline instability}: macro-F1 collapses to $\sim$0.06 under this
-    config's unscheduled SGD lr=0.01 on pooled heterogeneous batches -- a baseline
-    hyperparameter/optimization issue, not a property of the data or of FedSAA.
-  \item \textbf{Ablation grid coverage}: currently 3 $\lambda$ points and 4 rank points at a
-    single $(\tau, C)$ setting each, far short of the full 120-config grid.
-  \item \textbf{CPU-only, small backbone}: ResNet-18 at $28\times28$ for laptop feasibility;
-    results may not transfer to larger medical backbones/resolutions.
+  \item \textbf{CPU-only development}: ResNet-18 at $28\times28$ for laptop feasibility; results
+    may not transfer to larger medical backbones/resolutions.
   \item \textbf{MedMNIST as a specialty-heterogeneity proxy}: captures label-space/image-domain
-    shift across specialties, not device/scanner variation, within-hospital class imbalance, or
-    demographic shift.
+    shift, not device/scanner variation, within-hospital class imbalance, or demographic shift.
+    Testing on two independent mixes (A/B) partially addresses cross-partition generalization,
+    but both are still MedMNIST-derived.
+  \item \textbf{GPU estimate is an unverified heuristic} (Section~\ref{sec:setup}) -- not
+    measured on real GPU hardware.
 \end{itemize}
-\todo{add any additional limitations specific to your own reading of the results.}
 
 \section{Conclusion}
-\todo{write the actual conclusion once full\_run.yaml results are available. Draft talking
-points based on current (smoke-scale) evidence: (1) FedSAA's pipeline runs end-to-end on CPU and
-produces personalized, communication-matched LoRA adapters via similarity-attended aggregation;
-(2) $\lambda=1$ is verified to exactly reduce to FedAvg-on-merged-deltas, giving a principled
-interpolation between personalization and global averaging; (3) early small-scale signal favors
-lower $\lambda$ and rank $\approx$8 over the tested range, with meaningfully higher worst-client
-accuracy than FedAvg/FedProx at equal communication cost -- but this needs confirmation at
-\texttt{full\_run.yaml} scale with multiple seeds before any claim beyond ``the pipeline and
-method are implemented correctly.''}
+\todoresults{write once Section 5 exists. Do not draft talking points from unrun experiments.}
 
 \appendix
 \section{Reproducibility}
-Code layout, config schema, and CLI: see \texttt{README.md}. To reproduce this draft's numbers:
-\texttt{python -m experiments.runner --config configs/local\_debug.yaml --reduced
---rounds-override 3}, then \texttt{python -m src.viz.generate\_figures} and
-\texttt{python -m src.viz.generate\_tables} (both \texttt{--config configs/local\_debug.yaml}).
-To run the real experiment: \texttt{python -m experiments.runner --config
-configs/full\_run.yaml} (see \texttt{experiments/runtime\_estimate.py} for a per-config CPU
-runtime warning before committing to a run).
+Code layout, config schema, and CLI: see \texttt{README.md}. To run the real experiment:
+\texttt{python -m experiments.runner --config configs/full\_run.yaml --dataset A --resume} and
+\texttt{python -m experiments.runner --config configs/full\_run.yaml --dataset B --resume} (see
+\texttt{experiments/estimate.py} for a runtime estimate before committing to a run).
 
 % TODO(author): add a real \bibliography{refs} / \bibliographystyle once citation keys above
 % (mcmahan2017fedavg, li2020fedprox, hu2021lora, ...) are backed by an actual .bib file.
